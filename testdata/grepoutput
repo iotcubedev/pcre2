@@ -100,7 +100,7 @@ RC=0
 ./testdata/grepinputx:To pat or not to pat, that is the question.
 RC=0
 ---------------------------- Test 15 -----------------------------
-pcre2grep: Error in command-line regex at offset 4: nothing to repeat
+pcre2grep: Error in command-line regex at offset 4: quantifier does not follow a repeatable item
 RC=2
 ---------------------------- Test 16 -----------------------------
 pcre2grep: Failed to open ./testdata/nonexistfile: No such file or directory
@@ -742,4 +742,12 @@ RC=0
 RC=0
 ---------------------------- Test 106 -----------------------------
 a
+RC=0
+---------------------------- Test 107 -----------------------------
+1:0,1
+2:0,1
+2:1,1
+2:2,1
+2:3,1
+2:4,1
 RC=0

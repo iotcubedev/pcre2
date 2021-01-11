@@ -67,12 +67,15 @@
 # 2013-10-08 PH got rid of the "source" command, which is a bash-ism (use ".")
 # 2013-11-05 PH added support for PARENS_NEST_LIMIT
 # 2014-08-29 PH converted the file for PCRE2 (which has no C++).
+# 2015-04024 PH added support for PCRE2_DEBUG
 
 PROJECT(PCRE2 C)
 
-# Increased minimum to 2.8.0 to support newer add_test features
+# Increased minimum to 2.8.0 to support newer add_test features. Set policy
+# CMP0026 to avoid warnings for the use of LOCATION in GET_TARGET_PROPERTY.
 
 CMAKE_MINIMUM_REQUIRED(VERSION 2.8.0)
+CMAKE_POLICY(SET CMP0026 OLD)
 
 SET(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake) # for FindReadline.cmake
 
@@ -115,6 +118,8 @@ OPTION(PCRE2_BUILD_PCRE2_8 "Build 8 bit PCRE2 library" ON)
 OPTION(PCRE2_BUILD_PCRE2_16 "Build 16 bit PCRE2 library" OFF)
 
 OPTION(PCRE2_BUILD_PCRE2_32 "Build 32 bit PCRE2 library" OFF)
+
+OPTION(PCRE2_DEBUG "Include debugging code" OFF)
 
 SET(PCRE2_EBCDIC OFF CACHE BOOL
     "Use EBCDIC coding instead of ASCII. (This is rarely used outside of mainframe systems.)")
@@ -392,6 +397,7 @@ SET(PCRE2_SOURCES
   src/pcre2_newline.c
   src/pcre2_ord2utf.c
   src/pcre2_pattern_info.c
+  src/pcre2_serialize.c
   src/pcre2_string_utils.c
   src/pcre2_study.c
   src/pcre2_substitute.c
@@ -560,6 +566,15 @@ IF(PCRE2_BUILD_TESTS)
     ENDIF(PCRE2_BUILD_PCRE2_32)
     TARGET_LINK_LIBRARIES(pcre2_jit_test ${PCRE2_JIT_TEST_LIBS})
   ENDIF(PCRE2_SUPPORT_JIT)
+
+  # exes in Debug location tested by the RunTest shell script
+  # via "make test"
+
+  IF(PCRE2_BUILD_PCRE2GREP)
+    GET_TARGET_PROPERTY(PCRE2GREP_EXE pcre2grep DEBUG_LOCATION)
+  ENDIF(PCRE2_BUILD_PCRE2GREP)
+
+  GET_TARGET_PROPERTY(PCRE2TEST_EXE pcre2test DEBUG_LOCATION)
 
 # =================================================
   # Write out a CTest configuration file

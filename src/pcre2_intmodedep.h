@@ -584,14 +584,21 @@ typedef struct pcre2_real_match_context {
   uint32_t recursion_limit;
 } pcre2_real_match_context;
 
-/* The real compiled code structure */
+/* The real compiled code structure. The type for the blocksize field is
+defined specially because it is required in pcre2_serialize_decode() when
+copying the size from possibly unaligned memory into a variable of the same
+type. Use a macro rather than a typedef to avoid compiler warnings when this
+file is included multiple times by pcre2test. */
+
+#undef  CODE_BLOCKSIZE_TYPE
+#define CODE_BLOCKSIZE_TYPE size_t
 
 typedef struct pcre2_real_code {
   pcre2_memctl memctl;            /* Memory control fields */
   const uint8_t *tables;          /* The character tables */
   void    *executable_jit;        /* Pointer to JIT code */
   uint8_t  start_bitmap[32];      /* Bitmap for starting code unit < 256 */
-  size_t   blocksize;             /* Total (bytes) that was malloc-ed */
+  CODE_BLOCKSIZE_TYPE blocksize;  /* Total (bytes) that was malloc-ed */
   uint32_t magic_number;          /* Paranoid and endianness check */
   uint32_t compile_options;       /* Options passed to pcre2_compile() */
   uint32_t overall_options;       /* Options after processing the pattern */
@@ -633,6 +640,13 @@ typedef struct pcre2_real_match_data {
 
 #ifndef PCRE2_PCRE2TEST
 
+/* Structure for checking for mutual recursion when scanning compiled code. */
+
+typedef struct recurse_check {
+  struct recurse_check *prev;
+  PCRE2_SPTR group;
+} recurse_check;
+
 /* Structure for maintaining a chain of pointers to the currently incomplete
 branches, for testing for left recursion while compiling. */
 
@@ -646,8 +660,9 @@ compiling. */
 
 typedef struct named_group {
   PCRE2_SPTR   name;          /* Points to the name in the pattern */
-  int          length;        /* Length of the name */
   uint32_t     number;        /* Group number */
+  uint16_t     length;        /* Length of the name */
+  uint16_t     isdup;         /* TRUE if a duplicate */
 } named_group;
 
 /* Structure for passing "static" information around between the functions
@@ -677,7 +692,6 @@ typedef struct compile_block {
   uint32_t final_bracount;         /* Saved value after first pass */
   uint32_t top_backref;            /* Maximum back reference */
   uint32_t backref_map;            /* Bitmap of low back refs */
-  uint32_t namedrefcount;          /* Number of backreferences by name */
   uint32_t nltype;                 /* Newline type */
   uint32_t nllen;                  /* Newline string length */
   PCRE2_UCHAR nl[4];               /* Newline string when fixed length */
@@ -689,6 +703,7 @@ typedef struct compile_block {
   BOOL had_pruneorskip;            /* (*PRUNE) or (*SKIP) encountered */
   BOOL check_lookbehind;           /* Lookbehinds need later checking */
   BOOL dupnames;                   /* Duplicate names exist */
+  BOOL iscondassert;               /* Next assert is a condition */
 } compile_block;
 
 /* Structure for keeping the properties of the in-memory stack used

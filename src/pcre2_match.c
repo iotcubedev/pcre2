@@ -75,7 +75,7 @@ implementing this. */
 #define OVFLMASK    0xffff0000    /* The bits used for the overflow flag */
 #define OVFLBIT     0x00010000    /* The bit that is set for overflow */
 
-/* Values for setting in mb->match_function_type to indicate two special types
+/* Bits for setting in mb->match_function_type to indicate two special types
 of call to match(). We do it this way to save on using another stack variable,
 as stack usage is to be discouraged. */
 
@@ -487,7 +487,7 @@ data and the last captured value. */
 
 do
   {
-  if (cbegroup) mb->match_function_type = MATCH_CBEGROUP;
+  if (cbegroup) mb->match_function_type |= MATCH_CBEGROUP;
   rrc = match(eptr, callpat + PRIV(OP_lengths)[*callpat], mstart, offset_top,
     mb, eptrb, rdepth + 1);
   memcpy(mb->ovector, new_recursive->ovec_save,
@@ -771,9 +771,9 @@ if (mb->match_call_count++ >= mb->match_limit) RRETURN(PCRE2_ERROR_MATCHLIMIT);
 if (rdepth >= mb->match_limit_recursion) RRETURN(PCRE2_ERROR_RECURSIONLIMIT);
 
 /* At the start of a group with an unlimited repeat that may match an empty
-string, the variable mb->match_function_type is set to MATCH_CBEGROUP. It is
-done this way to save having to use another function argument, which would take
-up space on the stack. See also MATCH_CONDASSERT below.
+string, the variable mb->match_function_type contains the MATCH_CBEGROUP bit.
+It is done this way to save having to use another function argument, which
+would take up space on the stack. See also MATCH_CONDASSERT below.
 
 When MATCH_CBEGROUP is set, add the current subject pointer to the chain of
 such remembered pointers, to be checked when we hit the closing ket, in order
@@ -782,12 +782,12 @@ other circumstances, don't add to the chain. The MATCH_CBEGROUP feature must
 NOT be used with tail recursion, because the memory block that is used is on
 the stack, so a new one may be required for each match(). */
 
-if (mb->match_function_type == MATCH_CBEGROUP)
+if ((mb->match_function_type & MATCH_CBEGROUP) != 0)
   {
   newptrb.epb_saved_eptr = eptr;
   newptrb.epb_prev = eptrb;
   eptrb = &newptrb;
-  mb->match_function_type = 0;
+  mb->match_function_type &= ~MATCH_CBEGROUP;
   }
 
 /* Now, at last, we can start processing the opcodes. */
@@ -1016,7 +1016,7 @@ for (;;)
 
       for (;;)
         {
-        if (op >= OP_SBRA) mb->match_function_type = MATCH_CBEGROUP;
+        if (op >= OP_SBRA) mb->match_function_type |= MATCH_CBEGROUP;
         RMATCH(eptr, ecode + PRIV(OP_lengths)[*ecode], offset_top, mb,
           eptrb, RM1);
         if (rrc == MATCH_ONCE) break;  /* Backing up through an atomic group */
@@ -1091,7 +1091,7 @@ for (;;)
     for (;;)
       {
       if (op >= OP_SBRA || op == OP_ONCE)
-        mb->match_function_type = MATCH_CBEGROUP;
+        mb->match_function_type |= MATCH_CBEGROUP;
 
       /* If this is not a possibly empty group, and there are no (*THEN)s in
       the pattern, and this is the final alternative, optimize as described
@@ -1149,7 +1149,8 @@ for (;;)
     different. The end of these brackets will always be OP_KETRPOS, which
     returns MATCH_KETRPOS without going further in the pattern. By this means
     we can handle the group by iteration rather than recursion, thereby
-    reducing the amount of stack needed. */
+    reducing the amount of stack needed. If the ovector is too small for
+    capturing, treat as non-capturing. */
 
     case OP_CBRAPOS:
     case OP_SCBRAPOS:
@@ -1158,86 +1159,77 @@ for (;;)
     POSSESSIVE_CAPTURE:
     number = GET2(ecode, 1+LINK_SIZE);
     offset = number << 1;
+    if (offset >= mb->offset_max) goto POSSESSIVE_NON_CAPTURE;
 
-    if (offset < mb->offset_max)
+    matched_once = FALSE;
+    code_offset = (int)(ecode - mb->start_code);
+
+    save_offset1 = mb->ovector[offset];
+    save_offset2 = mb->ovector[offset+1];
+    save_offset3 = mb->ovector[mb->offset_end - number];
+    save_capture_last = mb->capture_last;
+
+    /* Each time round the loop, save the current subject position for use
+    when the group matches. For MATCH_MATCH, the group has matched, so we
+    restart it with a new subject starting position, remembering that we had
+    at least one match. For MATCH_NOMATCH, carry on with the alternatives, as
+    usual. If we haven't matched any alternatives in any iteration, check to
+    see if a previous iteration matched. If so, the group has matched;
+    continue from afterwards. Otherwise it has failed; restore the previous
+    capture values before returning NOMATCH. */
+
+    for (;;)
       {
-      matched_once = FALSE;
-      code_offset = (int)(ecode - mb->start_code);
-
-      save_offset1 = mb->ovector[offset];
-      save_offset2 = mb->ovector[offset+1];
-      save_offset3 = mb->ovector[mb->offset_end - number];
-      save_capture_last = mb->capture_last;
-
-      /* Each time round the loop, save the current subject position for use
-      when the group matches. For MATCH_MATCH, the group has matched, so we
-      restart it with a new subject starting position, remembering that we had
-      at least one match. For MATCH_NOMATCH, carry on with the alternatives, as
-      usual. If we haven't matched any alternatives in any iteration, check to
-      see if a previous iteration matched. If so, the group has matched;
-      continue from afterwards. Otherwise it has failed; restore the previous
-      capture values before returning NOMATCH. */
-
-      for (;;)
+      mb->ovector[mb->offset_end - number] = eptr - mb->start_subject;
+      if (op >= OP_SBRA) mb->match_function_type |= MATCH_CBEGROUP;
+      RMATCH(eptr, ecode + PRIV(OP_lengths)[*ecode], offset_top, mb,
+        eptrb, RM63);
+      if (rrc == MATCH_KETRPOS)
         {
-        mb->ovector[mb->offset_end - number] = eptr - mb->start_subject;
-        if (op >= OP_SBRA) mb->match_function_type = MATCH_CBEGROUP;
-        RMATCH(eptr, ecode + PRIV(OP_lengths)[*ecode], offset_top, mb,
-          eptrb, RM63);
-        if (rrc == MATCH_KETRPOS)
+        offset_top = mb->end_offset_top;
+        ecode = mb->start_code + code_offset;
+        save_capture_last = mb->capture_last;
+        matched_once = TRUE;
+        mstart = mb->start_match_ptr;    /* In case \K changed it */
+        if (eptr == mb->end_match_ptr)   /* Matched an empty string */
           {
-          offset_top = mb->end_offset_top;
-          ecode = mb->start_code + code_offset;
-          save_capture_last = mb->capture_last;
-          matched_once = TRUE;
-          mstart = mb->start_match_ptr;    /* In case \K changed it */
-          if (eptr == mb->end_match_ptr)   /* Matched an empty string */
-            {
-            do ecode += GET(ecode, 1); while (*ecode == OP_ALT);
-            break;
-            }
-          eptr = mb->end_match_ptr;
-          continue;
+          do ecode += GET(ecode, 1); while (*ecode == OP_ALT);
+          break;
           }
-
-        /* See comment in the code for capturing groups above about handling
-        THEN. */
-
-        if (rrc == MATCH_THEN)
-          {
-          next_ecode = ecode + GET(ecode,1);
-          if (mb->start_match_ptr < next_ecode &&
-              (*ecode == OP_ALT || *next_ecode == OP_ALT))
-            rrc = MATCH_NOMATCH;
-          }
-
-        if (rrc != MATCH_NOMATCH) RRETURN(rrc);
-        mb->capture_last = save_capture_last;
-        ecode += GET(ecode, 1);
-        if (*ecode != OP_ALT) break;
+        eptr = mb->end_match_ptr;
+        continue;
         }
 
-      if (!matched_once)
+      /* See comment in the code for capturing groups above about handling
+      THEN. */
+
+      if (rrc == MATCH_THEN)
         {
-        mb->ovector[offset] = save_offset1;
-        mb->ovector[offset+1] = save_offset2;
-        mb->ovector[mb->offset_end - number] = save_offset3;
+        next_ecode = ecode + GET(ecode,1);
+        if (mb->start_match_ptr < next_ecode &&
+            (*ecode == OP_ALT || *next_ecode == OP_ALT))
+          rrc = MATCH_NOMATCH;
         }
 
-      if (allow_zero || matched_once)
-        {
-        ecode += 1 + LINK_SIZE;
-        break;
-        }
-
-      RRETURN(MATCH_NOMATCH);
+      if (rrc != MATCH_NOMATCH) RRETURN(rrc);
+      mb->capture_last = save_capture_last;
+      ecode += GET(ecode, 1);
+      if (*ecode != OP_ALT) break;
       }
 
-    /* FALL THROUGH ... Insufficient room for saving captured contents. Treat
-    as a non-capturing bracket. */
+    if (!matched_once)
+      {
+      mb->ovector[offset] = save_offset1;
+      mb->ovector[offset+1] = save_offset2;
+      mb->ovector[mb->offset_end - number] = save_offset3;
+      }
 
-    /* VVVVVVVVVVVVVVVVVVVVVVVVV */
-    /* VVVVVVVVVVVVVVVVVVVVVVVVV */
+    if (allow_zero || matched_once)
+      {
+      ecode += 1 + LINK_SIZE;
+      break;
+      }
+    RRETURN(MATCH_NOMATCH);
 
     /* Non-capturing possessive bracket with unlimited repeat. We come here
     from BRAZERO with allow_zero = TRUE. The code is similar to the above,
@@ -1255,7 +1247,7 @@ for (;;)
 
     for (;;)
       {
-      if (op >= OP_SBRA) mb->match_function_type = MATCH_CBEGROUP;
+      if (op >= OP_SBRA) mb->match_function_type |= MATCH_CBEGROUP;
       RMATCH(eptr, ecode + PRIV(OP_lengths)[*ecode], offset_top, mb,
         eptrb, RM48);
       if (rrc == MATCH_KETRPOS)
@@ -1318,13 +1310,15 @@ for (;;)
     /* Because of the way auto-callout works during compile, a callout item is
     inserted between OP_COND and an assertion condition. */
 
-    if (*ecode == OP_CALLOUT)
+    if (*ecode == OP_CALLOUT || *ecode == OP_CALLOUT_STR)
       {
+      unsigned int callout_length = (*ecode == OP_CALLOUT)
+          ? PRIV(OP_lengths)[OP_CALLOUT] : GET(ecode, 1 + 2*LINK_SIZE);
+
       if (mb->callout != NULL)
         {
         pcre2_callout_block cb;
-        cb.version          = 0;
-        cb.callout_number   = ecode[1];
+        cb.version          = 1;
         cb.capture_top      = offset_top/2;
         cb.capture_last     = mb->capture_last & CAPLMASK;
         cb.offset_vector    = mb->ovector;
@@ -1333,8 +1327,25 @@ for (;;)
         cb.subject_length   = (PCRE2_SIZE)(mb->end_subject - mb->start_subject);
         cb.start_match      = (PCRE2_SIZE)(mstart - mb->start_subject);
         cb.current_position = (PCRE2_SIZE)(eptr - mb->start_subject);
-        cb.pattern_position = GET(ecode, 2);
-        cb.next_item_length = GET(ecode, 2 + LINK_SIZE);
+        cb.pattern_position = GET(ecode, 1);
+        cb.next_item_length = GET(ecode, 1 + LINK_SIZE);
+
+        if (*ecode == OP_CALLOUT)
+          {
+          cb.callout_number = ecode[1 + 2*LINK_SIZE];
+          cb.callout_string_offset = 0;
+          cb.callout_string = NULL;
+          cb.callout_string_length = 0;
+          }
+        else
+          {
+          cb.callout_number = 0;
+          cb.callout_string_offset = GET(ecode, 1 + 3*LINK_SIZE);
+          cb.callout_string = ecode + (1 + 4*LINK_SIZE) + 1;
+          cb.callout_string_length =
+            callout_length - (1 + 4*LINK_SIZE) - 2;
+          }
+
         if ((rrc = mb->callout(&cb, mb->callout_data)) > 0)
           RRETURN(MATCH_NOMATCH);
         if (rrc < 0) RRETURN(rrc);
@@ -1343,8 +1354,8 @@ for (;;)
       /* Advance ecode past the callout, so it now points to the condition. We
       must adjust codelink so that the value of ecode+codelink is unchanged. */
 
-      ecode += PRIV(OP_lengths)[OP_CALLOUT];
-      codelink -= PRIV(OP_lengths)[OP_CALLOUT];
+      ecode += callout_length;
+      codelink -= callout_length;
       }
 
     /* Test the various possible conditions */
@@ -1397,6 +1408,7 @@ for (;;)
       break;
 
       case OP_FALSE:
+      case OP_FAIL:   /* The assertion (?!) becomes OP_FAIL */
       break;
 
       case OP_TRUE:
@@ -1404,11 +1416,11 @@ for (;;)
       break;
 
       /* The condition is an assertion. Call match() to evaluate it - setting
-      mb->match_function_type to MATCH_CONDASSERT causes it to stop at the end
-      of an assertion. */
+      the MATCH_CONDASSERT bit in mb->match_function_type causes it to stop at
+      the end of an assertion. */
 
       default:
-      mb->match_function_type = MATCH_CONDASSERT;
+      mb->match_function_type |= MATCH_CONDASSERT;
       RMATCH(eptr, ecode, offset_top, mb, NULL, RM3);
       if (rrc == MATCH_MATCH)
         {
@@ -1459,7 +1471,7 @@ for (;;)
         goto TAIL_RECURSE;
         }
 
-      mb->match_function_type = MATCH_CBEGROUP;
+      mb->match_function_type |= MATCH_CBEGROUP;
       RMATCH(eptr, ecode, offset_top, mb, eptrb, RM49);
       RRETURN(rrc);
       }
@@ -1548,10 +1560,10 @@ for (;;)
     case OP_ASSERT:
     case OP_ASSERTBACK:
     save_mark = mb->mark;
-    if (mb->match_function_type == MATCH_CONDASSERT)
+    if ((mb->match_function_type & MATCH_CONDASSERT) != 0)
       {
       condassert = TRUE;
-      mb->match_function_type = 0;
+      mb->match_function_type &= ~MATCH_CONDASSERT;
       }
     else condassert = FALSE;
 
@@ -1619,10 +1631,10 @@ for (;;)
     case OP_ASSERT_NOT:
     case OP_ASSERTBACK_NOT:
     save_mark = mb->mark;
-    if (mb->match_function_type == MATCH_CONDASSERT)
+    if ((mb->match_function_type & MATCH_CONDASSERT) != 0)
       {
       condassert = TRUE;
-      mb->match_function_type = 0;
+      mb->match_function_type &= ~MATCH_CONDASSERT;
       }
     else condassert = FALSE;
 
@@ -1724,26 +1736,49 @@ for (;;)
     function is able to force a failure. */
 
     case OP_CALLOUT:
-    if (mb->callout != NULL)
+    case OP_CALLOUT_STR:
       {
-      pcre2_callout_block cb;
-      cb.version          = 0;
-      cb.callout_number   = ecode[1];
-      cb.capture_top      = offset_top/2;
-      cb.capture_last     = mb->capture_last & CAPLMASK;
-      cb.offset_vector    = mb->ovector;
-      cb.mark             = mb->nomatch_mark;
-      cb.subject          = mb->start_subject;
-      cb.subject_length   = (PCRE2_SIZE)(mb->end_subject - mb->start_subject);
-      cb.start_match      = (PCRE2_SIZE)(mstart - mb->start_subject);
-      cb.current_position = (PCRE2_SIZE)(eptr - mb->start_subject);
-      cb.pattern_position = GET(ecode, 2);
-      cb.next_item_length = GET(ecode, 2 + LINK_SIZE);
-      if ((rrc = mb->callout(&cb, mb->callout_data)) > 0)
-        RRETURN(MATCH_NOMATCH);
-      if (rrc < 0) RRETURN(rrc);
+      unsigned int callout_length = (*ecode == OP_CALLOUT)
+          ? PRIV(OP_lengths)[OP_CALLOUT] : GET(ecode, 1 + 2*LINK_SIZE);
+
+      if (mb->callout != NULL)
+        {
+        pcre2_callout_block cb;
+        cb.version          = 1;
+        cb.callout_number   = ecode[LINK_SIZE + 1];
+        cb.capture_top      = offset_top/2;
+        cb.capture_last     = mb->capture_last & CAPLMASK;
+        cb.offset_vector    = mb->ovector;
+        cb.mark             = mb->nomatch_mark;
+        cb.subject          = mb->start_subject;
+        cb.subject_length   = (PCRE2_SIZE)(mb->end_subject - mb->start_subject);
+        cb.start_match      = (PCRE2_SIZE)(mstart - mb->start_subject);
+        cb.current_position = (PCRE2_SIZE)(eptr - mb->start_subject);
+        cb.pattern_position = GET(ecode, 1);
+        cb.next_item_length = GET(ecode, 1 + LINK_SIZE);
+
+        if (*ecode == OP_CALLOUT)
+          {
+          cb.callout_number = ecode[1 + 2*LINK_SIZE];
+          cb.callout_string_offset = 0;
+          cb.callout_string = NULL;
+          cb.callout_string_length = 0;
+          }
+        else
+          {
+          cb.callout_number = 0;
+          cb.callout_string_offset = GET(ecode, 1 + 3*LINK_SIZE);
+          cb.callout_string = ecode + (1 + 4*LINK_SIZE) + 1;
+          cb.callout_string_length =
+            callout_length - (1 + 4*LINK_SIZE) - 2;
+          }
+
+        if ((rrc = mb->callout(&cb, mb->callout_data)) > 0)
+          RRETURN(MATCH_NOMATCH);
+        if (rrc < 0) RRETURN(rrc);
+        }
+      ecode += callout_length;
       }
-    ecode += 2 + 2*LINK_SIZE;
     break;
 
     /* Recursion either matches the current regex, or some subexpression. The
@@ -1844,7 +1879,7 @@ for (;;)
       cbegroup = (*callpat >= OP_SBRA);
       do
         {
-        if (cbegroup) mb->match_function_type = MATCH_CBEGROUP;
+        if (cbegroup) mb->match_function_type |= MATCH_CBEGROUP;
         RMATCH(eptr, callpat + PRIV(OP_lengths)[*callpat], offset_top,
           mb, eptrb, RM6);
         memcpy(mb->ovector, new_recursive.ovec_save,
@@ -2121,13 +2156,16 @@ for (;;)
     ecode++;
     break;
 
-    /* Multiline mode: start of subject unless notbol, or after any newline. */
+    /* Multiline mode: start of subject unless notbol, or after any newline
+    except for one at the very end, unless PCRE2_ALT_CIRCUMFLEX is set. */
 
     case OP_CIRCM:
     if ((mb->moptions & PCRE2_NOTBOL) != 0 && eptr == mb->start_subject)
       RRETURN(MATCH_NOMATCH);
     if (eptr != mb->start_subject &&
-        (eptr == mb->end_subject || !WAS_NEWLINE(eptr)))
+        ((eptr == mb->end_subject &&
+           (mb->poptions & PCRE2_ALT_CIRCUMFLEX) == 0) ||
+         !WAS_NEWLINE(eptr)))
       RRETURN(MATCH_NOMATCH);
     ecode++;
     break;
@@ -3541,9 +3579,13 @@ for (;;)
             }
 
           if (possessive) continue;    /* No backtracking */
+
+          /* After \C in UTF mode, pp might be in the middle of a Unicode
+          character. Use <= pp to ensure backtracking doesn't go too far. */
+
           for(;;)
             {
-            if (eptr == pp) goto TAIL_RECURSE;
+            if (eptr <= pp) goto TAIL_RECURSE;
             RMATCH(eptr, ecode, offset_top, mb, eptrb, RM23);
             if (rrc != MATCH_NOMATCH) RRETURN(rrc);
             eptr--;
@@ -3938,9 +3980,13 @@ for (;;)
             eptr += len;
             }
           if (possessive) continue;    /* No backtracking */
+
+          /* After \C in UTF mode, pp might be in the middle of a Unicode
+          character. Use <= pp to ensure backtracking doesn't go too far. */
+
           for(;;)
             {
-            if (eptr == pp) goto TAIL_RECURSE;
+            if (eptr <= pp) goto TAIL_RECURSE;
             RMATCH(eptr, ecode, offset_top, mb, eptrb, RM30);
             if (rrc != MATCH_NOMATCH) RRETURN(rrc);
             eptr--;
@@ -4073,9 +4119,13 @@ for (;;)
             eptr += len;
             }
           if (possessive) continue;    /* No backtracking */
+
+          /* After \C in UTF mode, pp might be in the middle of a Unicode
+          character. Use <= pp to ensure backtracking doesn't go too far. */
+
           for(;;)
             {
-            if (eptr == pp) goto TAIL_RECURSE;
+            if (eptr <= pp) goto TAIL_RECURSE;
             RMATCH(eptr, ecode, offset_top, mb, eptrb, RM34);
             if (rrc != MATCH_NOMATCH) RRETURN(rrc);
             eptr--;
@@ -5644,9 +5694,13 @@ for (;;)
         /* eptr is now past the end of the maximum run */
 
         if (possessive) continue;    /* No backtracking */
+
+        /* After \C in UTF mode, pp might be in the middle of a Unicode
+        character. Use <= pp to ensure backtracking doesn't go too far. */
+
         for(;;)
           {
-          if (eptr == pp) goto TAIL_RECURSE;
+          if (eptr <= pp) goto TAIL_RECURSE;
           RMATCH(eptr, ecode, offset_top, mb, eptrb, RM44);
           if (rrc != MATCH_NOMATCH) RRETURN(rrc);
           eptr--;
@@ -5688,12 +5742,17 @@ for (;;)
 
         if (possessive) continue;    /* No backtracking */
 
+        /* We use <= pp rather than == pp to detect the start of the run while
+        backtracking because the use of \C in UTF mode can cause BACKCHAR to
+        move back past pp. This is just palliative; the use of \C in UTF mode
+        is fraught with danger. */
+
         for(;;)
           {
           int lgb, rgb;
           PCRE2_SPTR fptr;
 
-          if (eptr == pp) goto TAIL_RECURSE;   /* At start of char run */
+          if (eptr <= pp) goto TAIL_RECURSE;   /* At start of char run */
           RMATCH(eptr, ecode, offset_top, mb, eptrb, RM45);
           if (rrc != MATCH_NOMATCH) RRETURN(rrc);
 
@@ -5711,7 +5770,7 @@ for (;;)
 
           for (;;)
             {
-            if (eptr == pp) goto TAIL_RECURSE;   /* At start of char run */
+            if (eptr <= pp) goto TAIL_RECURSE;   /* At start of char run */
             fptr = eptr - 1;
             if (!utf) c = *fptr; else
               {
@@ -5959,9 +6018,13 @@ for (;;)
           }
 
         if (possessive) continue;    /* No backtracking */
+
+        /* After \C in UTF mode, pp might be in the middle of a Unicode
+        character. Use <= pp to ensure backtracking doesn't go too far. */
+
         for(;;)
           {
-          if (eptr == pp) goto TAIL_RECURSE;
+          if (eptr <= pp) goto TAIL_RECURSE;
           RMATCH(eptr, ecode, offset_top, mb, eptrb, RM46);
           if (rrc != MATCH_NOMATCH) RRETURN(rrc);
           eptr--;
