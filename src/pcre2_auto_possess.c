@@ -561,15 +561,13 @@ Arguments:
   utf         TRUE in UTF mode
   cb          compile data block
   base_list   the data list of the base opcode
-  base_end    the end of the data list
-  rec_limit   points to recursion depth counter
 
 Returns:      TRUE if the auto-possessification is possible
 */
 
 static BOOL
 compare_opcodes(PCRE2_SPTR code, BOOL utf, const compile_block *cb,
-  const uint32_t *base_list, PCRE2_SPTR base_end, int *rec_limit)
+  const uint32_t *base_list, PCRE2_SPTR base_end)
 {
 PCRE2_UCHAR c;
 uint32_t list[8];
@@ -585,8 +583,6 @@ const uint8_t *set1, *set2, *set_end;
 uint32_t chr;
 BOOL accepted, invert_bits;
 BOOL entered_a_group = FALSE;
-
-if (--(*rec_limit) <= 0) return FALSE;  /* Recursion has gone too deep */
 
 /* Note: the base_list[1] contains whether the current opcode has a greedy
 (represented by a non-zero value) quantifier. This is a different from
@@ -605,12 +601,6 @@ for(;;)
   if (c == OP_CALLOUT)
     {
     code += PRIV(OP_lengths)[c];
-    continue;
-    }
-
-  if (c == OP_CALLOUT_STR)
-    {
-    code += GET(code, 1 + 2*LINK_SIZE);
     continue;
     }
 
@@ -664,8 +654,7 @@ for(;;)
 
     while (*next_code == OP_ALT)
       {
-      if (!compare_opcodes(code, utf, cb, base_list, base_end, rec_limit))
-        return FALSE;
+      if (!compare_opcodes(code, utf, cb, base_list, base_end)) return FALSE;
       code = next_code + 1 + LINK_SIZE;
       next_code += GET(next_code, 1);
       }
@@ -685,7 +674,7 @@ for(;;)
     /* The bracket content will be checked by the OP_BRA/OP_CBRA case above. */
 
     next_code += 1 + LINK_SIZE;
-    if (!compare_opcodes(next_code, utf, cb, base_list, base_end, rec_limit))
+    if (!compare_opcodes(next_code, utf, cb, base_list, base_end))
       return FALSE;
 
     code += PRIV(OP_lengths)[c];
@@ -1121,7 +1110,6 @@ register PCRE2_UCHAR c;
 PCRE2_SPTR end;
 PCRE2_UCHAR *repeat_opcode;
 uint32_t list[8];
-int rec_limit;
 
 for (;;)
   {
@@ -1136,8 +1124,7 @@ for (;;)
       get_chr_property_list(code, utf, cb->fcc, list) : NULL;
     list[1] = c == OP_STAR || c == OP_PLUS || c == OP_QUERY || c == OP_UPTO;
 
-    rec_limit = 1000;
-    if (end != NULL && compare_opcodes(end, utf, cb, list, end, &rec_limit))
+    if (end != NULL && compare_opcodes(end, utf, cb, list, end))
       {
       switch(c)
         {
@@ -1193,8 +1180,7 @@ for (;;)
 
       list[1] = (c & 1) == 0;
 
-      rec_limit = 1000;
-      if (compare_opcodes(end, utf, cb, list, end, &rec_limit))
+      if (compare_opcodes(end, utf, cb, list, end))
         {
         switch (c)
           {
@@ -1246,10 +1232,6 @@ for (;;)
     case OP_TYPEPOSUPTO:
     if (code[1 + IMM2_SIZE] == OP_PROP || code[1 + IMM2_SIZE] == OP_NOTPROP)
       code += 2;
-    break;
-
-    case OP_CALLOUT_STR:
-    code += GET(code, 1 + 2*LINK_SIZE);
     break;
 
 #ifdef SUPPORT_WIDE_CHARS

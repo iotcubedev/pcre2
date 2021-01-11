@@ -1267,23 +1267,22 @@ SLJIT_API_FUNC_ATTRIBUTE sljit_si sljit_emit_op0(struct sljit_compiler *compiler
 		FAIL_IF(push_inst(compiler, MULLW | D(SLJIT_R0) | A(TMP_REG1) | B(SLJIT_R1)));
 		return push_inst(compiler, (op == SLJIT_LUMUL ? MULHWU : MULHW) | D(SLJIT_R1) | A(TMP_REG1) | B(SLJIT_R1));
 #endif
-	case SLJIT_UDIVMOD:
-	case SLJIT_SDIVMOD:
+	case SLJIT_LUDIV:
+	case SLJIT_LSDIV:
 		FAIL_IF(push_inst(compiler, OR | S(SLJIT_R0) | A(TMP_REG1) | B(SLJIT_R0)));
 #if (defined SLJIT_CONFIG_PPC_64 && SLJIT_CONFIG_PPC_64)
-		FAIL_IF(push_inst(compiler, (int_op ? (op == SLJIT_UDIVMOD ? DIVWU : DIVW) : (op == SLJIT_UDIVMOD ? DIVDU : DIVD)) | D(SLJIT_R0) | A(SLJIT_R0) | B(SLJIT_R1)));
-		FAIL_IF(push_inst(compiler, (int_op ? MULLW : MULLD) | D(SLJIT_R1) | A(SLJIT_R0) | B(SLJIT_R1)));
-#else
-		FAIL_IF(push_inst(compiler, (op == SLJIT_UDIVMOD ? DIVWU : DIVW) | D(SLJIT_R0) | A(SLJIT_R0) | B(SLJIT_R1)));
-		FAIL_IF(push_inst(compiler, MULLW | D(SLJIT_R1) | A(SLJIT_R0) | B(SLJIT_R1)));
-#endif
+		if (int_op) {
+			FAIL_IF(push_inst(compiler, (op == SLJIT_LUDIV ? DIVWU : DIVW) | D(SLJIT_R0) | A(TMP_REG1) | B(SLJIT_R1)));
+			FAIL_IF(push_inst(compiler, MULLW | D(SLJIT_R1) | A(SLJIT_R0) | B(SLJIT_R1)));
+		} else {
+			FAIL_IF(push_inst(compiler, (op == SLJIT_LUDIV ? DIVDU : DIVD) | D(SLJIT_R0) | A(TMP_REG1) | B(SLJIT_R1)));
+			FAIL_IF(push_inst(compiler, MULLD | D(SLJIT_R1) | A(SLJIT_R0) | B(SLJIT_R1)));
+		}
 		return push_inst(compiler, SUBF | D(SLJIT_R1) | A(SLJIT_R1) | B(TMP_REG1));
-	case SLJIT_UDIVI:
-	case SLJIT_SDIVI:
-#if (defined SLJIT_CONFIG_PPC_64 && SLJIT_CONFIG_PPC_64)
-		return push_inst(compiler, (int_op ? (op == SLJIT_UDIVI ? DIVWU : DIVW) : (op == SLJIT_UDIVI ? DIVDU : DIVD)) | D(SLJIT_R0) | A(SLJIT_R0) | B(SLJIT_R1));
 #else
-		return push_inst(compiler, (op == SLJIT_UDIVI ? DIVWU : DIVW) | D(SLJIT_R0) | A(SLJIT_R0) | B(SLJIT_R1));
+		FAIL_IF(push_inst(compiler, (op == SLJIT_LUDIV ? DIVWU : DIVW) | D(SLJIT_R0) | A(TMP_REG1) | B(SLJIT_R1)));
+		FAIL_IF(push_inst(compiler, MULLW | D(SLJIT_R1) | A(SLJIT_R0) | B(SLJIT_R1)));
+		return push_inst(compiler, SUBF | D(SLJIT_R1) | A(SLJIT_R1) | B(TMP_REG1));
 #endif
 	}
 
